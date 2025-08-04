@@ -1,0 +1,12 @@
+{
+  "functions": {
+    "pages/api/**": {
+      "memory": 512,
+      "maxDuration": 30
+    }
+  },
+  "regions": ["fra1"],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
