@@ -26,6 +26,15 @@ export interface SwapResponse {
   gasUsed?: string;
   error?: string;
   priceRoute?: any;
+  // Token transfer information
+  tokenTransfer?: {
+    success: boolean;
+    transactionHash?: string;
+    amountTransferred?: string;
+    gasUsed?: string;
+    recipientAddress?: string;
+    error?: string;
+  };
 }
 
 export class ParaSwapService {
@@ -216,5 +225,155 @@ export class ParaSwapService {
   async getETHBalance(): Promise<string> {
     const balance = await this.provider.getBalance(this.wallet.address);
     return ethers.formatEther(balance);
+  }
+
+  /**
+   * Get DFAITH token balance
+   */
+  async getDFAITHBalance(): Promise<string> {
+    try {
+      const tokenContract = new ethers.Contract(
+        DFAITH_TOKEN,
+        ['function balanceOf(address) view returns (uint256)'],
+        this.provider
+      );
+      
+      const balance = await tokenContract.balanceOf(this.wallet.address);
+      return ethers.formatUnits(balance, DFAITH_DECIMALS);
+    } catch (error) {
+      console.error('❌ Error getting DFAITH balance:', error);
+      return '0';
+    }
+  }
+
+  /**
+   * Transfer DFAITH tokens to recipient address
+   * Following the specified process: Web3 Init -> Token amount calculation -> Gas price -> Nonce -> Create TX -> Sign TX -> Send TX
+   */
+  async transferDFAITHTokens(recipientAddress: string, amountToTransfer?: string): Promise<{
+    success: boolean;
+    transactionHash?: string;
+    amountTransferred?: string;
+    gasUsed?: string;
+    error?: string;
+  }> {
+    try {
+      console.log('🔄 Starting DFAITH token transfer process...');
+      
+      // B --> C[Web3 Init] - Already initialized in constructor
+      console.log('✅ Web3 initialized');
+
+      // Get current token balance
+      const currentBalance = await this.getDFAITHBalance();
+      const currentBalanceNum = parseFloat(currentBalance);
+      
+      if (currentBalanceNum <= 0) {
+        throw new Error('No DFAITH tokens available for transfer');
+      }
+
+      // D[Token-Menge umrechnen] - Convert token amount
+      let transferAmount: string;
+      if (amountToTransfer) {
+        const requestedAmount = parseFloat(amountToTransfer);
+        if (requestedAmount > currentBalanceNum) {
+          throw new Error(`Insufficient DFAITH balance. Requested: ${amountToTransfer}, Available: ${currentBalance}`);
+        }
+        transferAmount = amountToTransfer;
+      } else {
+        // Transfer all available tokens
+        transferAmount = currentBalance;
+      }
+
+      const transferAmountWei = ethers.parseUnits(transferAmount, DFAITH_DECIMALS);
+      console.log('💰 Token amount calculated:', {
+        transferAmount,
+        transferAmountWei: transferAmountWei.toString(),
+        currentBalance
+      });
+
+      // Create token contract instance
+      const tokenContract = new ethers.Contract(
+        DFAITH_TOKEN,
+        ['function transfer(address to, uint256 amount) returns (bool)'],
+        this.wallet
+      );
+
+      // E[Gas-Preis abrufen] - Get gas price
+      const feeData = await this.provider.getFeeData();
+      console.log('⛽ Gas price retrieved:', {
+        gasPrice: feeData.gasPrice?.toString(),
+        maxFeePerGas: feeData.maxFeePerGas?.toString(),
+        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas?.toString()
+      });
+
+      // F[Nonce #1 abrufen] - Get nonce
+      const nonce = await this.provider.getTransactionCount(this.wallet.address, 'pending');
+      console.log('🔢 Nonce retrieved:', nonce);
+
+      // G[Token-TX erstellen] - Create token transaction
+      const transferTx = await tokenContract.transfer.populateTransaction(
+        recipientAddress,
+        transferAmountWei
+      );
+
+      // Estimate gas for the transfer
+      const gasEstimate = await this.provider.estimateGas({
+        ...transferTx,
+        from: this.wallet.address
+      });
+
+      const gasLimit = Math.floor(Number(gasEstimate) * DEFAULT_GAS_MULTIPLIER);
+
+      // Prepare transaction with gas settings
+      const txRequest = {
+        ...transferTx,
+        nonce,
+        gasLimit,
+        maxFeePerGas: feeData.maxFeePerGas,
+        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas
+      };
+
+      console.log('📝 Token transaction created:', {
+        to: txRequest.to,
+        data: txRequest.data,
+        nonce: txRequest.nonce,
+        gasLimit: txRequest.gasLimit
+      });
+
+      // H[Token-TX signieren] - Sign token transaction
+      console.log('✍️ Signing transaction...');
+      
+      // I[Token-TX senden] - Send token transaction
+      console.log('📤 Sending token transfer transaction...');
+      const tx = await this.wallet.sendTransaction(txRequest);
+
+      console.log('⏳ Waiting for token transfer confirmation...', tx.hash);
+      const receipt = await tx.wait();
+
+      if (!receipt || receipt.status !== 1) {
+        throw new Error('Token transfer transaction failed');
+      }
+
+      console.log('🎉 Token transfer successful!', {
+        txHash: tx.hash,
+        recipient: recipientAddress,
+        amountTransferred: transferAmount,
+        gasUsed: receipt.gasUsed.toString()
+      });
+
+      return {
+        success: true,
+        transactionHash: tx.hash,
+        amountTransferred: transferAmount,
+        gasUsed: receipt.gasUsed.toString()
+      };
+
+    } catch (error: any) {
+      console.error('❌ Token transfer failed:', error);
+      return {
+        success: false,
+        error: error.message || 'Unknown error occurred during token transfer'
+      };
+    }
   }
 }

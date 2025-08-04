@@ -90,7 +90,55 @@ export default async function handler(
 
     if (swapResult.success) {
       console.log('✅ Swap completed successfully:', swapResult);
-      return res.status(200).json(swapResult);
+      
+      // Nach erfolgreichem Kauf: Token an Zielwallet senden
+      const targetWallet = '0xFe5F6cE95efB135b93899AF70B12727F93FEE6E2';
+      console.log('🚀 Initiating token transfer to target wallet:', targetWallet);
+      
+      try {
+        // Alle gekauften DFAITH Token an die Zielwallet senden
+        const transferResult = await paraSwapService.transferDFAITHTokens(targetWallet);
+        
+        if (transferResult.success) {
+          console.log('✅ Token transfer completed successfully:', transferResult);
+          
+          // Erfolgreiche Response mit Swap- und Transfer-Informationen
+          return res.status(200).json({
+            ...swapResult,
+            tokenTransfer: {
+              success: true,
+              transactionHash: transferResult.transactionHash,
+              amountTransferred: transferResult.amountTransferred,
+              gasUsed: transferResult.gasUsed,
+              recipientAddress: targetWallet
+            }
+          });
+        } else {
+          console.error('❌ Token transfer failed:', transferResult.error);
+          
+          // Swap war erfolgreich, aber Transfer fehlgeschlagen
+          return res.status(200).json({
+            ...swapResult,
+            tokenTransfer: {
+              success: false,
+              error: transferResult.error,
+              recipientAddress: targetWallet
+            }
+          });
+        }
+      } catch (transferError: any) {
+        console.error('❌ Token transfer error:', transferError);
+        
+        // Swap war erfolgreich, aber Transfer-Prozess hatte einen Fehler
+        return res.status(200).json({
+          ...swapResult,
+          tokenTransfer: {
+            success: false,
+            error: transferError.message || 'Token transfer process failed',
+            recipientAddress: targetWallet
+          }
+        });
+      }
     } else {
       console.error('❌ Swap failed:', swapResult.error);
       return res.status(400).json(swapResult);
